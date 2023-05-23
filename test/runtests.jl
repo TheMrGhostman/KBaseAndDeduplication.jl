@@ -116,20 +116,20 @@ using Flux
 			kb = KnowledgeBase((;a = randn(Float32, 3,4), b = randn(Float32, 5,4)))
 			a = KBEntry(:a, [4,1,3,2])
 			b = KBEntry(:b, [3,1,3,2])
-			kb = NeuroPlanner.append(kb, :c, ProductNode((;a = ArrayNode(a), b = ArrayNode(b))))
+			kb = KBaseAndDeduplication.append(kb, :c, ProductNode((;a = ArrayNode(a), b = ArrayNode(b))))
 			m = reflectinmodel(kb)
 
 			@test gradient(kb -> sum(sin.(m(kb))), kb) !== nothing
 			@test gradient(m -> sum(sin.(m(kb))), m) !== nothing
 
 
-			kb = NeuroPlanner.append(NeuroPlanner.atoms(kb), :c, BagNode(ArrayNode(a), [1:2, 3:4, 0:-1]))
+			kb = KBaseAndDeduplication.append(KBaseAndDeduplication.atoms(kb), :c, BagNode(ArrayNode(a), [1:2, 3:4, 0:-1]))
 			m = reflectinmodel(kb)
 			@test gradient(kb -> sum(sin.(m(kb))), kb) !== nothing
 			@test gradient(m -> sum(sin.(m(kb))), m) !== nothing
 
 
-			kb = NeuroPlanner.append(NeuroPlanner.atoms(kb), :c, BagNode(ProductNode((;a = ArrayNode(a), b = ArrayNode(b))), [1:2, 3:4, 0:-1]))
+			kb = KBaseAndDeduplication.append(KBaseAndDeduplication.atoms(kb), :c, BagNode(ProductNode((;a = ArrayNode(a), b = ArrayNode(b))), [1:2, 3:4, 0:-1]))
 			m = reflectinmodel(kb)
 			@test gradient(kb -> sum(sin.(m(kb))), kb) !== nothing
 			@test gradient(m -> sum(sin.(m(kb))), m) !== nothing
@@ -154,14 +154,14 @@ using Flux
 	@testset "Deduplication" begin
 		@testset "DeduplicatedMatrix" begin 
 			kb = KnowledgeBase((;a = [1 1 2 2 3 3]))
-			@test NeuroPlanner._deduplicate(kb, kb[:a])[1] == DeduplicatedMatrix(kb[:a])
-			@test NeuroPlanner._deduplicate(kb, kb[:a])[2] == DeduplicatedMatrix(kb[:a]).ii
+			@test KBaseAndDeduplication._deduplicate(kb, kb[:a])[1] == DeduplicatedMatrix(kb[:a])
+			@test KBaseAndDeduplication._deduplicate(kb, kb[:a])[2] == DeduplicatedMatrix(kb[:a]).ii
 		end
 
 		@testset "ArrayNode" begin 
 			kb = KnowledgeBase((;a = Float32[1 1 2 2 3 3], b = ArrayNode(KBEntry(:a, 1:6))))
 			m = reflectinmodel(kb, d -> Dense(d,10), SegmentedMean)
-			dekb = NeuroPlanner.deduplicate(kb)
+			dekb = KBaseAndDeduplication.deduplicate(kb)
 			@test dekb[:a] == DeduplicatedMatrix(kb[:a])
 			@test dekb[:b].ii == [1,1,2,2,3,3]
 			@test m(dekb) ≈ m(kb)
@@ -170,9 +170,9 @@ using Flux
 		@testset "BagNode" begin 
 			kb = KnowledgeBase((;a = Float32[1 1 2 2 3 3], b = BagNode(ArrayNode(KBEntry(:a, 1:6)), [1:2,3:3,4:4,5:6])))
 			m = reflectinmodel(kb, d -> Dense(d,10), SegmentedMean)
-			dekb = NeuroPlanner.deduplicate(kb)
+			dekb = KBaseAndDeduplication.deduplicate(kb)
 			@test m(dekb) ≈ m(kb)
-			@test dekb[:b] isa NeuroPlanner.DeduplicatingNode
+			@test dekb[:b] isa KBaseAndDeduplication.DeduplicatingNode
 			@test dekb[:b].ii == [1,2,2,3]
 			@test _isapprox(gradient(model -> sum(sin.(model(kb))), m)[1], gradient(model -> sum(sin.(model(dekb))), m)[1])
 		end
@@ -182,9 +182,9 @@ using Flux
 			b = Float32[1 2 2 2 2 3]
 			kb = KnowledgeBase((;a, b, c = ProductNode((KBEntry(:a, 1:6), KBEntry(:b, 1:6),))))
 			m = reflectinmodel(kb, d -> Dense(d,10), SegmentedMean)
-			dekb = NeuroPlanner.deduplicate(kb)
+			dekb = KBaseAndDeduplication.deduplicate(kb)
 			@test m(dekb) ≈ m(kb)
-			@test dekb[:c] isa NeuroPlanner.DeduplicatingNode
+			@test dekb[:c] isa KBaseAndDeduplication.DeduplicatingNode
 			@test dekb[:c].ii == [1,2,3,3,4,5]
 			@test _isapprox(gradient(model -> sum(sin.(model(kb))), m)[1], gradient(model -> sum(sin.(model(dekb))), m)[1])
 		end
@@ -203,3 +203,22 @@ using Flux
 		end
 	end
 end
+
+@testset "DeduplicatedMatrix" begin 
+	x = [1 2 2 1; 3 4 4 5]
+	dx = DeduplicatedMatrix(x)
+	@test dx.x == [1 2 1; 3 4 5]
+	@test dx.ii == [1, 2, 2, 3]
+	@test Matrix(dx) == x
+	@test Matrix(dx) isa Matrix
+
+	x = Float32[1 2 2 1; 3 4 4 5]
+	dx = DeduplicatedMatrix(x)
+	for m in (Dense(2,3), Chain(Dense(2,3),Dense(3,2)))
+		@test m(dx) isa DeduplicatedMatrix
+		@test m(dx) ≈ m(x)
+		@test _isapprox(gradient(m -> sum(m(x)), m), gradient(m -> sum(m(dx)), m))
+		@test _isapprox(Yota.grad(model -> sum(model(x)), m)[2][2],gradient(m -> sum(m(x)), m)[1])
+	end
+end
+
